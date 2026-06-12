@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>設置確認スキャン</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js"></script>
 <style>
   body { font-family: sans-serif; margin: 16px; background: #f5f5f5; }
   h2 { font-size: 1.2em; margin-bottom: 8px; }
@@ -35,10 +34,9 @@ const AES_KEY = 'zaiko_2026_GPS';
 const AES_IV  = 'NextITIV20260526';
 
 var video = document.getElementById('video');
-var canvas = document.createElement('canvas');
-var ctx = canvas.getContext('2d');
 var scanning = false;
 var stream = null;
+var detector = null;
 
 function setDebug(msg) {
   document.getElementById('debug').textContent = msg;
@@ -92,58 +90,24 @@ function onDetected(rawValue) {
   );
 }
 
-function startBarcodeDetector() {
-  setDebug('方式: BarcodeDetector');
-  var detector = new BarcodeDetector({ formats: ['qr_code'] });
-  function tick() {
-    if (!scanning) return;
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      detector.detect(video)
-        .then(function(barcodes) {
-          if (barcodes.length > 0) {
-            onDetected(barcodes[0].rawValue);
-            return;
-          }
-          setTimeout(function() { requestAnimationFrame(tick); }, 100);
-        })
-        .catch(function(e) {
-          setDebug('BarcodeDetectorエラー: ' + e.message);
-          setTimeout(function() { requestAnimationFrame(tick); }, 100);
-        });
-    } else {
-      setTimeout(function() { requestAnimationFrame(tick); }, 100);
-    }
+function tick() {
+  if (!scanning) return;
+  if (video.readyState < 2 || video.videoWidth === 0) {
+    setTimeout(function() { requestAnimationFrame(tick); }, 200);
+    return;
   }
-  scanning = true;
-  document.getElementById('status').textContent = 'QRコードをカメラに向けてください';
-  requestAnimationFrame(tick);
-}
-
-function startJsQR() {
-  setDebug('方式: jsQR / videoサイズ: ' + video.videoWidth + 'x' + video.videoHeight);
-  function tick() {
-    if (!scanning) return;
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-        canvas.width  = video.videoWidth  || 640;
-        canvas.height = video.videoHeight || 480;
-        setDebug('方式: jsQR / canvasサイズ: ' + canvas.width + 'x' + canvas.height);
-      }
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      var code = jsQR(imageData.data, imageData.width, imageData.height, {
-        inversionAttempts: 'attemptBoth'
-      });
-      if (code && code.data) {
-        onDetected(code.data);
+  detector.detect(video)
+    .then(function(barcodes) {
+      if (barcodes.length > 0) {
+        onDetected(barcodes[0].rawValue);
         return;
       }
-    }
-    setTimeout(function() { requestAnimationFrame(tick); }, 100);
-  }
-  scanning = true;
-  document.getElementById('status').textContent = 'QRコードをカメラに向けてください';
-  requestAnimationFrame(tick);
+      setTimeout(function() { requestAnimationFrame(tick); }, 150);
+    })
+    .catch(function(e) {
+      setDebug('検出エラー: ' + e.message);
+      setTimeout(function() { requestAnimationFrame(tick); }, 200);
+    });
 }
 
 function startCamera() {
@@ -151,15 +115,15 @@ function startCamera() {
   .then(function(s) {
     stream = s;
     video.srcObject = s;
-    video.playsInline = true;
-    video.play();
-    video.onplaying = function() {
-      if ('BarcodeDetector' in window) {
-        startBarcodeDetector();
-      } else {
-        startJsQR();
-      }
-    };
+    video.play().then(function() {
+      // play()完了後に500ms待ってからスキャン開始
+      setTimeout(function() {
+        setDebug('方式: BarcodeDetector / ' + video.videoWidth + 'x' + video.videoHeight);
+        scanning = true;
+        document.getElementById('status').textContent = 'QRコードをカメラに向けてください';
+        requestAnimationFrame(tick);
+      }, 500);
+    });
   })
   .catch(function(err) {
     document.getElementById('status').textContent = 'カメラエラー: ' + err.message;
@@ -174,6 +138,7 @@ function restartScan() {
   startCamera();
 }
 
+detector = new BarcodeDetector({ formats: ['qr_code'] });
 startCamera();
 </script>
 </body>
