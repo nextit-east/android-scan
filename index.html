@@ -11,6 +11,7 @@
   h2 { font-size: 1.2em; margin-bottom: 8px; }
   video { width: 100%; max-width: 400px; border: 1px solid #ccc; border-radius: 6px; }
   #status { margin: 8px 0; font-size: 0.95em; color: #333; min-height: 1.4em; }
+  #debug { font-size: 0.85em; color: #888; margin-top: 4px; }
   #result-msg { font-size: 1em; margin-top: 10px; min-height: 1.4em; }
   button {
     display: block; width: 100%; max-width: 400px;
@@ -24,6 +25,7 @@
 <h2>設置確認スキャン</h2>
 <video id="video" playsinline muted></video>
 <p id="status">カメラ起動中...</p>
+<p id="debug"></p>
 <p id="result-msg"></p>
 <button onclick="restartScan()">再スキャン</button>
 
@@ -37,6 +39,10 @@ var canvas = document.createElement('canvas');
 var ctx = canvas.getContext('2d');
 var scanning = false;
 var stream = null;
+
+function setDebug(msg) {
+  document.getElementById('debug').textContent = msg;
+}
 
 function encryptLatLng(lat, lng) {
   var plain = lat + ',' + lng;
@@ -86,8 +92,8 @@ function onDetected(rawValue) {
   );
 }
 
-// BarcodeDetector方式
 function startBarcodeDetector() {
+  setDebug('方式: BarcodeDetector');
   var detector = new BarcodeDetector({ formats: ['qr_code'] });
   function tick() {
     if (!scanning) return;
@@ -100,7 +106,8 @@ function startBarcodeDetector() {
           }
           setTimeout(function() { requestAnimationFrame(tick); }, 100);
         })
-        .catch(function() {
+        .catch(function(e) {
+          setDebug('BarcodeDetectorエラー: ' + e.message);
           setTimeout(function() { requestAnimationFrame(tick); }, 100);
         });
     } else {
@@ -112,14 +119,15 @@ function startBarcodeDetector() {
   requestAnimationFrame(tick);
 }
 
-// jsQRフォールバック方式
 function startJsQR() {
+  setDebug('方式: jsQR / videoサイズ: ' + video.videoWidth + 'x' + video.videoHeight);
   function tick() {
     if (!scanning) return;
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
         canvas.width  = video.videoWidth  || 640;
         canvas.height = video.videoHeight || 480;
+        setDebug('方式: jsQR / canvasサイズ: ' + canvas.width + 'x' + canvas.height);
       }
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -139,9 +147,7 @@ function startJsQR() {
 }
 
 function startCamera() {
-  navigator.mediaDevices.getUserMedia({
-    video: { facingMode: 'environment' }
-  })
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
   .then(function(s) {
     stream = s;
     video.srcObject = s;
@@ -164,6 +170,7 @@ function restartScan() {
   scanning = false;
   document.getElementById('status').textContent = 'カメラ起動中...';
   document.getElementById('result-msg').textContent = '';
+  setDebug('');
   startCamera();
 }
 
