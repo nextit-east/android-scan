@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>設置確認スキャン</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js"></script>
 <style>
   body { font-family: sans-serif; margin: 16px; background: #f5f5f5; }
   h2 { font-size: 1.2em; margin-bottom: 8px; }
@@ -22,7 +23,7 @@
 </head>
 <body>
 <h2>設置確認スキャン</h2>
-<video id="video" playsinline muted></video>
+<video id="video" playsinline muted autoplay></video>
 <p id="status">カメラ起動中...</p>
 <p id="debug"></p>
 <p id="result-msg"></p>
@@ -34,9 +35,11 @@ const AES_KEY = 'zaiko_2026_GPS';
 const AES_IV  = 'NextITIV20260526';
 
 var video = document.getElementById('video');
+var canvas = document.createElement('canvas');
+var ctx = canvas.getContext('2d');
 var scanning = false;
 var stream = null;
-var detector = null;
+var detector = ('BarcodeDetector' in window) ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
 
 function setDebug(msg) {
   document.getElementById('debug').textContent = msg;
@@ -96,18 +99,45 @@ function tick() {
     setTimeout(function() { requestAnimationFrame(tick); }, 200);
     return;
   }
-  detector.detect(video)
-    .then(function(barcodes) {
-      if (barcodes.length > 0) {
-        onDetected(barcodes[0].rawValue);
-        return;
-      }
-      setTimeout(function() { requestAnimationFrame(tick); }, 150);
-    })
-    .catch(function(e) {
-      setDebug('検出エラー: ' + e.message);
-      setTimeout(function() { requestAnimationFrame(tick); }, 200);
-    });
+
+  // canvasにフレームを焼き付ける
+  if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+  }
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  if (detector) {
+    // BarcodeDetector(canvas経由)
+    detector.detect(canvas)
+      .then(function(barcodes) {
+        if (barcodes.length > 0) {
+          onDetected(barcodes[0].rawValue);
+          return;
+        }
+        // 検出なし→jsQRでもフォールバック
+        var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+        if (code && code.data) {
+          onDetected(code.data);
+          return;
+        }
+        setTimeout(function() { requestAnimationFrame(tick); }, 100);
+      })
+      .catch(function(e) {
+        setDebug('BarcodeDetectorエラー: ' + e.message);
+        setTimeout(function() { requestAnimationFrame(tick); }, 200);
+      });
+  } else {
+    // jsQRのみ
+    var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+    if (code && code.data) {
+      onDetected(code.data);
+      return;
+    }
+    setTimeout(function() { requestAnimationFrame(tick); }, 100);
+  }
 }
 
 function startCamera() {
@@ -115,15 +145,16 @@ function startCamera() {
   .then(function(s) {
     stream = s;
     video.srcObject = s;
-    video.play().then(function() {
-      // play()完了後に500ms待ってからスキャン開始
-      setTimeout(function() {
-        setDebug('方式: BarcodeDetector / ' + video.videoWidth + 'x' + video.videoHeight);
-        scanning = true;
-        document.getElementById('status').textContent = 'QRコードをカメラに向けてください';
-        requestAnimationFrame(tick);
-      }, 500);
-    });
+    video.playsInline = true;
+    return video.play();
+  })
+  .then(function() {
+    setTimeout(function() {
+      setDebug((detector ? 'BarcodeDetector+jsQR' : 'jsQR') + ' / ' + video.videoWidth + 'x' + video.videoHeight);
+      scanning = true;
+      document.getElementById('status').textContent = 'QRコードをカメラに向けてください';
+      requestAnimationFrame(tick);
+    }, 800);
   })
   .catch(function(err) {
     document.getElementById('status').textContent = 'カメラエラー: ' + err.message;
@@ -138,7 +169,6 @@ function restartScan() {
   startCamera();
 }
 
-detector = new BarcodeDetector({ formats: ['qr_code'] });
 startCamera();
 </script>
 </body>
