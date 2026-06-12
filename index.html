@@ -2,16 +2,15 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>設置確認スキャン</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js"></script>
 <style>
   body { font-family: sans-serif; margin: 16px; background: #f5f5f5; }
   h2 { font-size: 1.2em; margin-bottom: 8px; }
-  video { width: 100%; max-width: 400px; border: 1px solid #ccc; border-radius: 6px; }
+  #reader { width: 100%; max-width: 400px; margin-bottom: 12px; }
   #status { margin: 8px 0; font-size: 0.95em; color: #333; min-height: 1.4em; }
-  #debug { font-size: 0.85em; color: #888; margin-top: 4px; }
   #result-msg { font-size: 1em; margin-top: 10px; min-height: 1.4em; }
   button {
     display: block; width: 100%; max-width: 400px;
@@ -23,9 +22,8 @@
 </head>
 <body>
 <h2>設置確認スキャン</h2>
-<video id="video" playsinline muted autoplay></video>
+<div id="reader"></div>
 <p id="status">カメラ起動中...</p>
-<p id="debug"></p>
 <p id="result-msg"></p>
 <button onclick="restartScan()">再スキャン</button>
 
@@ -34,16 +32,8 @@ const GAS_URL = 'https://script.google.com/macros/s/AKfycbzQqOq1Lf0026xZVu3CwbM4
 const AES_KEY = 'zaiko_2026_GPS';
 const AES_IV  = 'NextITIV20260526';
 
-var video = document.getElementById('video');
-var canvas = document.createElement('canvas');
-var ctx = canvas.getContext('2d');
-var scanning = false;
-var stream = null;
-var detector = ('BarcodeDetector' in window) ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
-
-function setDebug(msg) {
-  document.getElementById('debug').textContent = msg;
-}
+var scanner = null;
+var processing = false;
 
 function encryptLatLng(lat, lng) {
   var plain = lat + ',' + lng;
@@ -54,16 +44,24 @@ function encryptLatLng(lat, lng) {
   }).toString();
 }
 
-function onDetected(rawValue) {
-  scanning = false;
-  if (stream) stream.getTracks().forEach(function(t) { t.stop(); });
+function onScanSuccess(rawValue) {
+  if (processing) return;
+  processing = true;
+
+  if (scanner) {
+    scanner.clear().catch(function() {});
+    scanner = null;
+  }
+
   var id = rawValue
     .replace(/[\uFF10-\uFF19]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
     .replace(/[\uFF21-\uFF3A]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
     .replace(/[\uFF41-\uFF5A]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
     .replace(/[\u30FC\uFF0D\u2212\u2014\u2013]/g, '-')
     .trim();
+
   document.getElementById('status').textContent = '読取: ' + id + ' / 位置情報取得中...';
+
   navigator.geolocation.getCurrentPosition(
     function(pos) {
       var lat = pos.coords.latitude.toFixed(6);
@@ -81,95 +79,44 @@ function onDetected(rawValue) {
       .then(function() {
         document.getElementById('result-msg').textContent = '送信完了: ' + id;
         document.getElementById('status').textContent = '完了';
+        processing = false;
       })
       .catch(function(e) {
         document.getElementById('result-msg').textContent = '送信失敗: ' + e.message;
+        processing = false;
       });
     },
     function(err) {
       document.getElementById('status').textContent = '位置情報エラー: ' + err.message;
+      processing = false;
     },
     { enableHighAccuracy: true, timeout: 15000 }
   );
 }
 
-function tick() {
-  if (!scanning) return;
-  if (video.readyState < 2 || video.videoWidth === 0) {
-    setTimeout(function() { requestAnimationFrame(tick); }, 200);
-    return;
-  }
-
-  // canvasにフレームを焼き付ける
-  if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-    canvas.width  = video.videoWidth;
-    canvas.height = video.videoHeight;
-  }
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-  if (detector) {
-    // BarcodeDetector(canvas経由)
-    detector.detect(canvas)
-      .then(function(barcodes) {
-        if (barcodes.length > 0) {
-          onDetected(barcodes[0].rawValue);
-          return;
-        }
-        // 検出なし→jsQRでもフォールバック
-        var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-        if (code && code.data) {
-          onDetected(code.data);
-          return;
-        }
-        setTimeout(function() { requestAnimationFrame(tick); }, 100);
-      })
-      .catch(function(e) {
-        setDebug('BarcodeDetectorエラー: ' + e.message);
-        setTimeout(function() { requestAnimationFrame(tick); }, 200);
-      });
-  } else {
-    // jsQRのみ
-    var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-    if (code && code.data) {
-      onDetected(code.data);
-      return;
-    }
-    setTimeout(function() { requestAnimationFrame(tick); }, 100);
-  }
-}
-
-function startCamera() {
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-  .then(function(s) {
-    stream = s;
-    video.srcObject = s;
-    video.playsInline = true;
-    return video.play();
-  })
-  .then(function() {
-    setTimeout(function() {
-      setDebug((detector ? 'BarcodeDetector+jsQR' : 'jsQR') + ' / ' + video.videoWidth + 'x' + video.videoHeight);
-      scanning = true;
-      document.getElementById('status').textContent = 'QRコードをカメラに向けてください';
-      requestAnimationFrame(tick);
-    }, 800);
-  })
-  .catch(function(err) {
-    document.getElementById('status').textContent = 'カメラエラー: ' + err.message;
-  });
+function startScan() {
+  processing = false;
+  document.getElementById('status').textContent = 'QRコードをカメラに向けてください';
+  document.getElementById('result-msg').textContent = '';
+  scanner = new Html5QrcodeScanner('reader', {
+    fps: 10,
+    qrbox: { width: 250, height: 250 }
+  }, false);
+  scanner.render(onScanSuccess, function() {});
 }
 
 function restartScan() {
-  scanning = false;
-  document.getElementById('status').textContent = 'カメラ起動中...';
-  document.getElementById('result-msg').textContent = '';
-  setDebug('');
-  startCamera();
+  if (scanner) {
+    scanner.clear().catch(function() {}).finally(function() {
+      scanner = null;
+      startScan();
+    });
+  } else {
+    startScan();
+  }
 }
 
-startCamera();
+startScan();
 </script>
 </body>
 </html>
