@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>設置確認スキャン</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js"></script>
+<style>
+  body { font-family: sans-serif; margin: 16px; background: #f5f5f5; }
+  h2 { font-size: 1.2em; margin-bottom: 8px; }
+  video { width: 100%; max-width: 400px; border: 1px solid #ccc; border-radius: 6px; }
+  button {
+    display: block; width: 100%; max-width: 400px;
+    padding: 14px; font-size: 1em; border: none;
+    border-radius: 8px; cursor: pointer; margin-top: 10px;
+    box-sizing: border-box; background: #4CAF50; color: #fff;
+  }
+  button:disabled { background: #aaa; cursor: default; }
+  #status { margin: 8px 0; font-size: 0.95em; color: #333; min-height: 1.4em; }
+  #result-msg { font-size: 1em; margin-top: 10px; min-height: 1.4em; }
+</style>
+</head>
+<body>
+<h2>設置確認スキャン</h2>
+<video id="video" playsinline autoplay></video>
+<p id="status">カメラ起動中...</p>
+<p id="result-msg"></p>
+
+<script>
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbzQqOq1Lf0026xZVu3CwbM41FxmCx0x14_iUzEHOfC-1tBE90xmKNjVfI7AxHNMYGOv/exec';
+const AES_KEY = 'zaiko_2026_GPS';
+const AES_IV  = 'NextITIV20260526';
+
+var video = document.getElementById('video');
+var canvas, ctx;
+var scanning = true;
+
+function encryptLatLng(lat, lng) {
+  var plain = lat + ',' + lng;
+  var key = CryptoJS.enc.Utf8.parse(AES_KEY.padEnd(32, '0').slice(0, 32));
+  var iv  = CryptoJS.enc.Utf8.parse(AES_IV);
+  return CryptoJS.AES.encrypt(plain, key, {
+    iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7
+  }).toString();
+}
+
+navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+  .then(function(stream) {
+    video.srcObject = stream;
+    video.play();
+    requestAnimationFrame(tick);
+    document.getElementById('status').textContent = 'QRコードをカメラに向けてください';
+  })
+  .catch(function(err) {
+    document.getElementById('status').textContent = 'カメラエラー: ' + err.message;
+  });
+
+function tick() {
+  if (!scanning) return;
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      ctx = canvas.getContext('2d');
+    }
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+    var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    var code = jsQR(imageData.data, imageData.width, imageData.height);
+    if (code) {
+      scanning = false;
+      video.srcObject.getTracks().forEach(function(t) { t.stop(); });
+      var id = code.data
+        .replace(/[\uFF10-\uFF19]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+        .replace(/[\uFF21-\uFF3A]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+        .replace(/[\uFF41-\uFF5A]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+        .replace(/[\u30FC\uFF0D\u2212\u2014\u2013]/g, '-')
+        .trim();
+      document.getElementById('status').textContent = '読取: ' + id + ' / 位置情報取得中...';
+      navigator.geolocation.getCurrentPosition(
+        function(pos) {
+          var lat = pos.coords.latitude.toFixed(6);
+          var lng = pos.coords.longitude.toFixed(6);
+          var encrypted = encryptLatLng(lat, lng);
+          document.getElementById('status').textContent = '送信中...';
+          fetch(GAS_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({
+              ids: [id], type: '設置確認', place: '社外',
+              lat: lat, lng: lng, gps: encrypted
+            })
+          })
+          .then(function() {
+            document.getElementById('result-msg').textContent = '送信完了: ' + id;
+            document.getElementById('status').textContent = '完了';
+          })
+          .catch(function(e) {
+            document.getElementById('result-msg').textContent = '送信失敗: ' + e.message;
+          });
+        },
+        function(err) {
+          document.getElementById('status').textContent = '位置情報エラー: ' + err.message;
+        },
+        { enableHighAccuracy: true, timeout: 15000 }
+      );
+      return;
+    }
+  }
+  requestAnimationFrame(tick);
+}
+</script>
+</body>
+</html>
