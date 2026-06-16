@@ -23,7 +23,7 @@
 <body>
 <h2>設置確認スキャン</h2>
 <div id="reader"></div>
-<p id="status">カメラ起動中...</p>
+<p id="status">QRコードをカメラに向けてください</p>
 <p id="result-msg"></p>
 <button onclick="restartScan()">再スキャン</button>
 
@@ -100,7 +100,10 @@ function startScan() {
   document.getElementById('result-msg').textContent = '';
   scanner = new Html5QrcodeScanner('reader', {
     fps: 10,
-    qrbox: { width: 250, height: 250 }
+    qrbox: { width: 250, height: 250 },
+    experimentalFeatures: {
+      useBarCodeDetectorIfSupported: false
+    }
   }, false);
   scanner.render(onScanSuccess, function() {});
 }
